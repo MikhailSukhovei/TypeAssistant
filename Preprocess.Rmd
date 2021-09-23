@@ -1,0 +1,186 @@
+---
+title: "Preprocess"
+author: "Sukhovei Mikhail"
+date: "20 09 2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(quanteda)
+library(data.table)
+
+source("TypeAssistant/utils.R")
+```
+
+```{r}
+## returns words that occurred only in one corpus
+get_rare_words_by_corpora <- function(files, paths) {
+    words <- list()
+    for (path in paths) {
+        toks <- clean_and_tokenize(files[[path]])
+        ngrams <- tokens_ngrams(toks, n = 1)
+        rm(toks)
+        
+        dat.dfm <- dfm(ngrams)
+        rm(ngrams)
+        
+        words[[path]] <- featnames(dat.dfm)
+    }
+    words <- unlist(words, use.names = FALSE)
+    corpora_freq <- table(words)
+    return(names(corpora_freq[corpora_freq == 1]))
+}
+```
+
+```{r, cache=TRUE}
+start.time <- Sys.time()
+
+paths <- c(
+    file.path("data", "en_US", "en_US.blogs.txt"),
+    file.path("data", "en_US", "en_US.news.txt"),
+    file.path("data", "en_US", "en_US.twitter.txt")
+)
+
+ratio_train <- 0.01
+n_test <- 300
+n_val <- 300
+files = list()
+test <- character()
+val <- character()
+for (path in paths) {
+    files[[path]] <- readLines(path, encoding = "UTF-8", skipNul = TRUE)
+    
+    len <- length(files[[path]])
+    idx <- 1:len
+    
+    test_idx <- 1:n_test
+    val_idx <- (n_test + 1):(n_test + n_val)
+    
+    n_train <- as.integer((len - n_test - n_val) * ratio_train)
+    
+    train_idx <- (n_test + n_val + 1):(n_test + n_val + n_train)
+    
+    test <- c(test, files[[path]][test_idx])
+    val <- c(val, files[[path]][val_idx])
+    files[[path]] <- files[[path]][train_idx]
+}
+
+rare_words_by_corp <- get_rare_words_by_corpora(files, paths)
+
+texts <- unlist(files, use.names = FALSE)
+toks <- clean_and_tokenize(texts)
+print(paste("Delete", length(rare_words_by_corp), "rare tokens"))
+toks <- tokens_remove(toks, rare_words_by_corp)
+
+end.time <- Sys.time()
+time.taken <- end.time - start.time
+print(time.taken)
+```
+
+```{r}
+getNgramFreqs <- function(ng, toks, sort.by.ngram=FALSE, sort.by.freq=TRUE) {
+    ngrams <- tokens_ngrams(toks, n = ng)
+    rm(toks)
+    
+    dat.dfm <- dfm(ngrams)
+    rm(ngrams)
+
+    ngram.freq <- docfreq(dat.dfm)
+    if (sort.by.freq) {
+        ngram.freq <- sort(ngram.freq, decreasing=TRUE)
+    }
+    if (sort.by.ngram) {
+        ngram.freq <- ngram.freq[sort(names(ngram.freq))]
+    }
+    rm(dat.dfm)
+    
+    return(ngram.freq)
+}
+
+getNgramTables <- function(ng, linesCorpus) {
+    start.time <- Sys.time()
+    
+    ngrams <- getNgramFreqs(ng, linesCorpus)
+    ngrams_dt <- data.table(ngram = names(ngrams), freq = ngrams)
+    
+    end.time <- Sys.time()
+    time.taken <- end.time - start.time
+    print(time.taken)
+    
+    return(ngrams_dt)
+}
+```
+
+```{r, cache=TRUE}
+unigrams <- getNgramTables(1, toks)
+plot(unigrams$freq, log = "xy", type = "S")
+print(dim(unigrams))
+
+bigrams <- getNgramTables(2, toks)
+plot(bigrams$freq, log = "xy", type = "S")
+print(dim(bigrams))
+
+trigrams <- getNgramTables(3, toks)
+plot(trigrams$freq, log = "xy", type = "S")
+print(dim(trigrams))
+
+tetragrams <- getNgramTables(4, toks)
+plot(tetragrams$freq, log = "xy", type = "S")
+print(dim(tetragrams))
+
+pentagrams <- getNgramTables(5, toks)
+plot(pentagrams$freq, log = "xy", type = "S")
+print(dim(pentagrams))
+```
+
+```{r}
+print(object.size(unigrams), units = "auto")
+print(object.size(bigrams), units = "auto")
+print(object.size(trigrams), units = "auto")
+print(object.size(tetragrams), units = "auto")
+print(object.size(pentagrams), units = "auto")
+```
+
+```{r}
+start.time <- Sys.time()
+
+save(unigrams, file = "model/unigrams.Rdata")
+save(bigrams, file = "model/bigrams.Rdata")
+save(trigrams, file = "model/trigrams.Rdata")
+save(tetragrams, file = "model/tetragrams.Rdata")
+save(pentagrams, file = "model/pentagrams.Rdata")
+
+end.time <- Sys.time()
+time.taken <- end.time - start.time
+print(time.taken)
+```
+
+```{r}
+get_test <- function(texts) {
+    tokens <- clean_and_tokenize(texts)
+    
+    features <- list()
+    label <- list()
+    for (name in names(tokens)) {
+        if (length(tokens[[name]]) >= 5) {
+            middle <- as.integer(length(tokens[[name]]) / 2)
+            features[[name]] <- tokens[[name]][1:middle]
+            label[[name]] <- tokens[[name]][middle + 1]
+        }
+    }
+    
+    features <- sapply(features, paste, collapse = " ")
+    label <- unlist(label)
+    data.frame(text = features, next_word = label)
+}
+```
+
+```{r}
+test.frame <- get_test(test)
+val.frame <- get_test(val)
+
+write.csv(test.frame, file = "test/test.csv")
+write.csv(val.frame, file = "test/val.csv")
+```

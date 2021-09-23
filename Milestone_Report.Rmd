@@ -1,0 +1,379 @@
+---
+title: "Concept of next word prediction application"
+author: "Sukhovei Mikhail"
+date: "05 09 2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(quanteda)
+```
+
+## Executive summary
+
+This report presents the general concept of the algorithm for predicting the next word that will be entered by the user. For this purpose, we use the HC Corpus en_US dataset and the quanteda R package. The main idea of the algorithm is to predict the next word using ngrams (bigrams, trigrams and tetragrams). Having found all the ngrams in the corpus, we divide them into the left part (the predictor) and the right part (the predicted word), and then, using the matrix of coincidence frequencies, we can make a prediction for one, two or three words typed by the user.\
+Data preparation pipeline consist of data loading, word tokens extraction, generating ngrams and generating co-occurance matrix.
+
+## Data preparation
+
+```{r}
+paths.en_US <- c(
+    file.path("data", "en_US", "en_US.blogs.txt"),
+    file.path("data", "en_US", "en_US.news.txt"),
+    file.path("data", "en_US", "en_US.twitter.txt")
+)
+```
+
+### load data
+
+At the data loading stage, we do not use all the data, because a small amount of data well represents the entire corpus. We don't mix the data from blogs, news and twitter corpora for more detailed analysis.
+
+```{r, cache=TRUE, warning=FALSE}
+files.en_US = list()
+for (path in paths.en_US) {
+    files.en_US[[path]] <- readLines(path, n=20000, encoding = "UTF-8")
+}
+```
+
+### extract word tokens
+
+For tokenization, we do not need any punctuation marks, numbers and URLs. As we will see later, we need a more thorough stage of data cleaning.
+
+```{r, cache=TRUE}
+tokens.en_US = list()
+for (path in paths.en_US) {
+    file <- files.en_US[[path]]
+    
+    tokens.en_US[[path]] <- tokens_tolower(tokens(
+        file,
+        what = "word",
+        remove_punct = TRUE,
+        remove_symbols = TRUE,
+        remove_numbers = TRUE,
+        remove_url = TRUE,
+        remove_separators = TRUE,
+        split_hyphens = FALSE,
+        include_docvars = TRUE,  # not sure
+        padding = FALSE
+    ))
+}
+```
+
+### generate ngrams
+
+In order to predict the next word from one word entered by the user, we need to generate all possible digrams. For more accurate prediction, we will also use trigrams and tetragrams, but to use them, the user must enter two and three words.
+
+```{r, cache=TRUE}
+digms <- list()
+for (path in paths.en_US) {
+    digms[[path]] <- tokens_ngrams(tokens.en_US[[path]], n = 2)
+}
+
+trigms <- list()
+for (path in paths.en_US) {
+    trigms[[path]] <- tokens_ngrams(tokens.en_US[[path]], n = 3)
+}
+
+tetragms <- list()
+for (path in paths.en_US) {
+    tetragms[[path]] <- tokens_ngrams(tokens.en_US[[path]], n = 4)
+}
+```
+
+### generate co-occurance matrix
+
+The co-occurance matrix contains the frequency of matches of (n-1)grams with the last word.
+
+For prediction we split all ngrams in corpora to (n-1)grams and predicted words.
+
+```{r}
+get.fcm <- function(ngms) {
+    # https://github.com/quanteda/quanteda/issues/1413
+
+    ngms_lst <- as.list(ngms)
+    ngms_unlst <- unlist(ngms_lst)
+    
+    ngms_blank_sep <- stringi::stri_replace_last_fixed(ngms_unlst, "_", " ")
+    
+    tk2_lst <- tokens(ngms_blank_sep)
+    
+    fcm(tk2_lst, "window", window = 1, ordered = TRUE, tri = FALSE)
+}
+```
+
+```{r, cache=TRUE}
+fcm_digms <- list()
+for (path in paths.en_US) {
+    fcm_digms[[path]] <- get.fcm(digms[[path]])
+}
+
+fcm_trigms <- list()
+for (path in paths.en_US) {
+    fcm_trigms[[path]] <- get.fcm(trigms[[path]])
+}
+
+fcm_tetragms <- list()
+for (path in paths.en_US) {
+    fcm_tetragms[[path]] <- get.fcm(tetragms[[path]])
+}
+```
+
+#### get top-10 next words by (n-1)gram
+
+```{r}
+get.top10.next.words <- function(fcm, ngram) {
+    if (ngram %in% rownames(fcm)) {
+        top10 <- topfeatures(fcm[ngram, ], n = 10)
+        top10 <- data.frame(top10)
+        names(top10) <- c("freq")
+        top10
+    } else {
+        NULL
+    }
+}
+```
+
+#### get top-10 predecessor (n-1)grams by word
+
+```{r}
+get.top10.predecessor.words <- function(fcm, word) {
+    if (word %in% rownames(fcm)) {
+        frame <- convert(fcm[, word], to = "data.frame")
+        top10 <- head(frame[order(-frame[word], frame["doc_id"]), ], 10)
+        rownames(top10) <- unlist(top10["doc_id"])
+        top10["doc_id"] <- NULL
+        names(top10) <- c("freq")
+        top10
+    } else {
+        NULL
+    }
+}
+```
+
+## EDA
+
+```{r}
+print(paths.en_US)
+```
+
+### number of tokens
+
+```{r, echo=FALSE}
+for (path in paths.en_US) {
+    tokens <- as.list(tokens.en_US[[path]])
+    tokens_num <- sapply(tokens, length)
+    breaks <- seq(0, 300, length.out=40)
+    if (path == paths.en_US[1]) {
+        hist(
+            tokens_num[tokens_num >= 0 & tokens_num < 300],
+            breaks = breaks,
+            xlim = c(0, 300),
+            ylim = c(0, 8000),
+            col = rgb(1, 0, 0, 0.5),
+            xlab = "number of tokens in text",
+            main = "number of tokens distribution by corpora"
+        )
+    } else if ((path == paths.en_US[2])) {
+        hist(
+            tokens_num[tokens_num >= 0 & tokens_num < 300],
+            breaks = breaks,
+            xlim = c(0, 300),
+            ylim = c(0, 3500),
+            add = TRUE,
+            col = rgb(0, 1, 0, 0.5)
+        )
+    } else if ((path == paths.en_US[3])) {
+        hist(
+            tokens_num[tokens_num >= 0 & tokens_num < 300],
+            breaks = breaks,
+            xlim = c(0, 300),
+            ylim = c(0, 3500),
+            add = TRUE,
+            col = rgb(0, 0, 1, 0.5)
+        )
+    }
+}
+legend(
+    "topright",
+    legend = c("blogs", "news", "twitter"),
+    col = c("red", "green", "blue"),
+    pch = rep(15, 3),
+    cex=0.8
+)
+```
+
+From histogram we can see that
+
+* twitter texts significantly shorter than blogs and news
+* news texts slightly shorter than blogs
+
+### Zipf’s word frequency law
+
+The frequency distribution of words approximately follows a simple mathematical form known as Zipf’s law: the $r$th most frequent word has a frequency $f(r)$ that scales according to
+
+\begin{equation}
+    f(r) \propto \frac{1}{r^{\alpha}}
+\end{equation}
+
+for $\alpha \approx 1$ (Zipf, 1936, 1949).
+
+```{r, echo=FALSE}
+for (path in paths.en_US) {
+    tokens <- as.list(tokens.en_US[[path]])
+    tokens <- unlist(tokens, use.names=FALSE)
+    freq <- data.frame(table(tokens))
+    freq <- freq[order(-freq$Freq), ]
+    freq$order <- 1:nrow(freq)
+    if (path == paths.en_US[1]) {
+        plot(
+            freq$order,
+            freq$Freq,
+            log = "xy",
+            main = "Frequency of words in English corpora",
+            xlab = "number of word",
+            ylab = "word frequency",
+            type = "S",
+            col = "red"
+        )
+    } else if ((path == paths.en_US[2])) {
+        lines(freq$order, freq$Freq, type = "S", col = "green")
+    } else if ((path == paths.en_US[3])) {
+        lines(freq$order, freq$Freq, type = "S", col = "blue")
+    }
+}
+legend(
+    "topright",
+    legend = c("blogs", "news", "twitter"),
+    col = c("red", "green", "blue"),
+    lty = rep(1, 3),
+    cex=0.8
+)
+```
+
+From this figure, we can see that
+
+* all the corpora contain texts written in natural language
+* blogs and news corpora have almost the same vocabulary size
+* twitter vocabulary size is almost two times smaller than blogs and news
+
+### most frequent left part (predictor)
+
+#### digrams
+
+```{r}
+for (path in paths.en_US) {
+    print(path)
+    print(head(sort(rowSums(fcm_digms[[path]]), decreasing = TRUE)))
+}
+```
+
+#### trigrams
+
+```{r}
+for (path in paths.en_US) {
+    print(path)
+    print(head(sort(rowSums(fcm_trigms[[path]]), decreasing = TRUE)))
+}
+```
+
+#### tetragrams
+
+```{r}
+for (path in paths.en_US) {
+    print(path)
+    print(head(sort(rowSums(fcm_tetragms[[path]]), decreasing = TRUE)))
+}
+```
+
+We can see that
+
+* blogs and news corpora give almost the same top-6 left part of ngrams
+* twitter is significantly differ from blogs and news text
+
+### most frequent right part (predicted word)
+
+
+
+```{r}
+for (path in paths.en_US) {
+    print(path)
+    print(topfeatures(fcm_digms[[path]]))
+}
+```
+
+## sample prediction
+
+We can separately run three prediction models:
+
+* digrams model
+* trigram model
+* tetragram model
+
+```{r}
+get.top10.next.words(fcm_digms[[paths.en_US[1]]], "the")
+```
+
+```{r}
+get.top10.next.words(fcm_trigms[[paths.en_US[1]]], "of_the")
+```
+
+```{r}
+get.top10.next.words(fcm_tetragms[[paths.en_US[1]]], "one_of_the")
+```
+
+We see that the prediction of the tetragram model is more confident. Therefore, for forecasting, we need to first try to find the next word of the tetragram model, then the trigram model, and finally the diagram.
+
+## algorithm concept
+
+Pseudocode of shinyapp
+
+```{r, tidy=FALSE, eval=FALSE, highlight=FALSE}
+user_input <- get()
+user_tokens <- tokens(user_input)
+length_tokens <- length(user_tokens)
+
+if (length(user_input) >= 3) {
+    next_word <- tetragram(user_tokens[length_tokens-2:length_tokens])
+    if (is.null(next_word)) {
+        next_word <- trigram(user_tokens[length_tokens-1:length_tokens])
+        if (is.null(next_word)) {
+            next_word <- digram(user_tokens[length_tokens])
+        }
+    }
+} else if (length(user_input) >= 2) {
+    next_word <- trigram(user_tokens[length_tokens-1:length_tokens])
+    if (is.null(next_word)) {
+        next_word <- digram(user_tokens[length_tokens])
+    }
+} else if (length(user_input) >= 1) {
+    next_word <- digram(user_tokens[length_tokens])
+} else {
+    next_word <- NULL
+}
+
+set(next_word)
+```
+
+## Quiz predictions
+
+* The guy in front of me just bought a pound of bacon, a bouquet, and a case of
+
+```{r}
+for (i in 1:3) {
+    print(get.top10.next.words(fcm_tetragms[[paths.en_US[i]]], "a_case_of"))
+}
+```
+
+Possible improvements:
+
+* more accurate data cleaning (reducing co-occurance matrix will give higher performance)
+* since we need to recommend only one possible next word we need only ngrams with highest frequency therefore we can transform (n x n) co-occurance matrix to vector of length n with only maximal frequency predictions
+* since blogs and news corpora is similar we can use, for example, only blogs
+* since twitter corpus contains less tokens we need to take more texts from it
+
+## Referencies
+
+Zipf, G. (1936). The Psychobiology of Language. London: Routledge.\
+Zipf, G. (1949). Human Behavior and the Principle of Least Effort. New York: Addison-Wesley.

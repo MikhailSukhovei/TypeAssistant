@@ -1,0 +1,89 @@
+---
+title: ''
+author: "Sukhovei Mikhail"
+date: "13 08 2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# DESCRIPRIVE ANALYSIS
+
+## English language (en_US)
+
+```{r}
+files.en_US.paths <- c(
+    file.path("data", "en_US", "en_US.blogs.txt"),
+    file.path("data", "en_US", "en_US.news.txt"),
+    file.path("data", "en_US", "en_US.twitter.txt")
+)
+```
+
+### load data
+
+```{r, cache=TRUE}
+files.en_US = list()
+for (path in files.en_US.paths) {
+    files.en_US[[path]] <- readLines(path, encoding = "UTF-8")
+}
+```
+
+### file sizes
+
+```{r}
+for (path in files.en_US.paths) {
+    print(sprintf("Size of %s is %.0f MB", path, file.info(path)$size / 1024 / 1024))
+}
+```
+
+### file lengths
+
+```{r}
+for (path in files.en_US.paths) {
+    print(sprintf("The length of %s is %i lines", path, length(files.en_US[[path]])))
+}
+```
+
+### the longest line
+
+```{r}
+for (path in files.en_US.paths) {
+    length.line <- 0
+    for (line in files.en_US[[path]]) {
+        if (nchar(line) > length.line) {
+            length.line <- nchar(line)
+        }
+    }
+    print(sprintf("The longest line in %s is %i characters long:", path, length.line))
+}
+```
+
+### quiz tasks
+
+#### 4. love vs hate in blogs
+
+In the en_US twitter data set, if you divide the number of lines where the word "love" (all lowercase) occurs by the number of lines the word "hate" (all lowercase) occurs, about what do you get?
+
+```{r}
+love.count <- sum(grepl("love", files.en_US[[files.en_US.paths[3]]]))
+hate.count <- sum(grepl("hate", files.en_US[[files.en_US.paths[3]]]))
+print(sprintf("love/hate ratio is %.2f", love.count / hate.count))
+```
+
+#### 5. biostats
+
+The one tweet in the en_US twitter data set that matches the word "biostats" says what?
+
+```{r}
+print(files.en_US[[files.en_US.paths[3]]][grep("biostats", files.en_US[[files.en_US.paths[3]]])])
+```
+
+#### 6. a computer once beat me at chess but it was no match for me at kickboxing
+
+How many tweets have the exact characters "A computer once beat me at chess, but it was no match for me at kickboxing". (I.e. the line matches those characters exactly.)
+
+```{r}
+print(sum(grepl("A computer once beat me at chess, but it was no match for me at kickboxing", files.en_US[[files.en_US.paths[3]]])))
+```

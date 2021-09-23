@@ -1,0 +1,269 @@
+---
+title: "Katz Back-Off"
+author: "Sukhovei Mikhail"
+date: "11 09 2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(quanteda)
+library(data.table)
+library(dplyr)
+library(hunspell)
+library(stringr)
+
+source("TypeAssistant/algorithm.R")
+source("TypeAssistant/utils.R")
+
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+## returns words that occurred only in one corpus
+get_rare_words_by_corpora <- function(files, paths) {
+    words <- list()
+    for (path in paths) {
+        toks <- clean_and_tokenize(files[[path]])
+        ngrams <- tokens_ngrams(toks, n = 1)
+        rm(toks)
+        
+        dat.dfm <- dfm(ngrams)
+        rm(ngrams)
+        
+        words[[path]] <- featnames(dat.dfm)
+    }
+    words <- unlist(words, use.names = FALSE)
+    corpora_freq <- table(words)
+    return(names(corpora_freq[corpora_freq == 1]))
+}
+```
+
+```{r, cache=TRUE}
+start.time <- Sys.time()
+
+paths <- c(
+    file.path("data", "en_US", "en_US.blogs.txt"),
+    file.path("data", "en_US", "en_US.news.txt"),
+    file.path("data", "en_US", "en_US.twitter.txt")
+)
+
+ratio <- 0.6
+files = list()
+for (path in paths) {
+    files[[path]] <- readLines(path, encoding = "UTF-8", skipNul = TRUE)
+    len <- as.integer(ratio * length(files[[path]]))
+    total <- length(files[[path]])
+    files[[path]] <- files[[path]][(total - len):total]
+}
+
+rare_words_by_corp <- get_rare_words_by_corpora(files, paths)
+
+texts <- unlist(files, use.names = FALSE)
+toks <- clean_and_tokenize(texts)
+print(paste("Delete", length(rare_words_by_corp), "rare tokens"))
+toks <- tokens_remove(toks, rare_words_by_corp)
+
+end.time <- Sys.time()
+time.taken <- end.time - start.time
+print(time.taken)
+```
+
+```{r}
+getNgramFreqs <- function(ng, toks, sort.by.ngram=FALSE, sort.by.freq=TRUE) {
+    ngrams <- tokens_ngrams(toks, n = ng)
+    rm(toks)
+    
+    dat.dfm <- dfm(ngrams)
+    rm(ngrams)
+
+    ngram.freq <- docfreq(dat.dfm)
+    if (sort.by.freq) {
+        ngram.freq <- sort(ngram.freq, decreasing=TRUE)
+    }
+    if (sort.by.ngram) {
+        ngram.freq <- ngram.freq[sort(names(ngram.freq))]
+    }
+    rm(dat.dfm)
+    
+    return(ngram.freq)
+}
+
+getNgramTables <- function(ng, linesCorpus, k = 1) {
+    start.time <- Sys.time()
+    
+    ngrams <- getNgramFreqs(ng, linesCorpus)
+    ngrams <- ngrams[ngrams > k]
+    
+    ngrams_dt <- data.table(
+        ngram = names(ngrams),
+        freq = ngrams
+    )
+    
+    end.time <- Sys.time()
+    time.taken <- end.time - start.time
+    print(time.taken)
+    
+    return(ngrams_dt)
+}
+```
+
+```{r}
+unigrams <- getNgramTables(1, toks, k = 2)
+plot(unigrams$freq, log = "xy", type = "S")
+print(dim(unigrams))
+
+bigrams <- getNgramTables(2, toks, k = 4)
+plot(bigrams$freq, log = "xy", type = "S")
+print(dim(bigrams))
+
+trigrams <- getNgramTables(3, toks, k = 6)
+plot(trigrams$freq, log = "xy", type = "S")
+print(dim(trigrams))
+
+tetragrams <- getNgramTables(4, toks, k = 4)
+plot(tetragrams$freq, log = "xy", type = "S")
+print(dim(tetragrams))
+
+pentagrams <- getNgramTables(5, toks, k = 2)
+plot(pentagrams$freq, log = "xy", type = "S")
+print(dim(pentagrams))
+```
+
+```{r}
+print(object.size(unigrams), units = "auto")
+print(object.size(bigrams), units = "auto")
+print(object.size(trigrams), units = "auto")
+print(object.size(tetragrams), units = "auto")
+print(object.size(pentagrams), units = "auto")
+```
+
+```{r}
+start.time <- Sys.time()
+
+save(unigrams, file = "unigrams.Rdata")
+save(bigrams, file = "bigrams.Rdata")
+save(trigrams, file = "trigrams.Rdata")
+save(tetragrams, file = "tetragrams.Rdata")
+save(pentagrams, file = "pentagrams.Rdata")
+
+end.time <- Sys.time()
+time.taken <- end.time - start.time
+print(time.taken)
+```
+
+```{r}
+pBO_0 <- data.table(
+    ngram = unigrams$ngram,
+    prob = unigrams$freq / sum(unigrams$freq)
+)
+pBO_0 <- pBO_0[order(-pBO_0$prob), ]
+print(head(pBO_0))
+
+start.time <- Sys.time()
+pBO_1 <- KBO_step(pBO_0, "the", bigrams)
+print(head(pBO_1))
+end.time <- Sys.time()
+time.taken <- end.time - start.time
+print(time.taken)
+
+start.time <- Sys.time()
+pBO_2 <- KBO_step(pBO_1, "at_the", trigrams)
+print(head(pBO_2))
+end.time <- Sys.time()
+time.taken <- end.time - start.time
+print(time.taken)
+
+start.time <- Sys.time()
+pBO_3 <- KBO_step(pBO_2, "date_at_the", tetragrams)
+print(head(pBO_3))
+end.time <- Sys.time()
+time.taken <- end.time - start.time
+print(time.taken)
+
+start.time <- Sys.time()
+pBO_4 <- KBO_step(pBO_3, "romantic_date_at_the", pentagrams)
+print(head(pBO_4))
+end.time <- Sys.time()
+time.taken <- end.time - start.time
+print(time.taken)
+```
+
+```{r}
+start.time <- Sys.time()
+
+textspre <- c(
+    "",
+    "The",
+    "The guy",
+    "The guy in",
+    "The guy in front",
+    "The guy in front of",
+    "The guy in front of me just bought a pound of bacon, a bouquet, and a case of",
+    "You're the reason why I smile everyday. Can you follow me please? It would mean the",
+    "Hey sunshine, can you follow me and make me the",
+    "Very early observations on the Bills game: Offense still struggling but the",
+    "Go on a romantic date at the",
+    "Well I'm pretty sure my granny has some old bagpipes in her garage I'll dust them off and be on my",
+    "Ohhhhh #PointBreak is on tomorrow. Love that film and haven't seen it in quite some",
+    "After the ice bucket challenge Louis will push his long wet hair out of his eyes with his little",
+    "Be grateful for the good times and keep the faith during the",
+    "If this isn't the cutest thing you've ever seen, then you must be",
+    "When you breathe, I want to be the air for you. I'll be there for you, I'd live and I'd",
+    "Guy at my table's wife got up to go to the bathroom and I asked about dessert and he started telling me about his",
+    "I'd give anything to see arctic monkeys this",
+    "Talking to your mom has the same effect as a hug and helps reduce your",
+    "When you were in Holland you were like 1 inch away from me but you hadn't time to take a",
+    "I'd just like all of these questions answered, a presentation of evidence, and a jury to settle the",
+    "I can't deal with unsymetrical things. I can't even hold an uneven number of bags of groceries in each",
+    "Every inch of you is perfect from the bottom to the",
+    "I’m thankful my childhood was filled with imagination and bruises from playing",
+    "I like how the same people are in almost all of Adam Sandler's"
+)
+
+discription <- c(
+    "Test 1. empty input",
+    "Test 2. 1gram",
+    "Test 3. 2gram",
+    "Test 4. 3gram",
+    "Test 5. 4gram",
+    "Test 6. 5gram",
+    "Qiuz I. Question 1",
+    "Qiuz I. Question 2",
+    "Qiuz I. Question 3",
+    "Qiuz I. Question 4",
+    "Qiuz I. Question 5",
+    "Qiuz I. Question 6",
+    "Qiuz I. Question 7",
+    "Qiuz I. Question 8",
+    "Qiuz I. Question 9",
+    "Qiuz I. Question 10",
+    "Qiuz II. Question 1",
+    "Qiuz II. Question 2",
+    "Qiuz II. Question 3",
+    "Qiuz II. Question 4",
+    "Qiuz II. Question 5",
+    "Qiuz II. Question 6",
+    "Qiuz II. Question 7",
+    "Qiuz II. Question 8",
+    "Qiuz II. Question 9",
+    "Qiuz II. Question 10"
+)
+
+tokens <- clean_and_tokenize(textspre)
+
+for (i in 1:length(textspre)) {
+    print(discription[i]); print("")
+    print("Original text:")
+    print(textspre[i]); print("")
+    print("Cleaned tokens:")
+    print(tokens[[i]]); print("")
+    print("Prediction:")
+    print(KBO_predict(tokens[[i]], list(unigrams, bigrams, trigrams, tetragrams, pentagrams))); print("")
+    print("-------------------------------------------------------------------")
+    print("")
+}
+
+end.time <- Sys.time()
+time.taken <- end.time - start.time
+print(time.taken)
+```
